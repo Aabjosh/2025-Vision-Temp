@@ -32,19 +32,49 @@ def filter_hsv_inverted(frame, pv_hue_min, pv_hue_max, saturation_min, saturatio
 
     return cv2.inRange(hsv, lower_bound, upper_bound)
 
+def calculate_distance_and_angle(contour, focal_length, actual_diameter, camera_center):
+    """
+    Calculate the distance and angle to the cylinder using perspective projection.
+    
+    Args:
+        contour: Detected cylinder contour
+        focal_length: Camera focal length in pixels
+        actual_diameter: Real diameter of the cylinder in meters
+        camera_center: Tuple of (cx, cy) representing the camera's optical center
+    
+    Returns:
+        tuple: (distance in meters, angle in degrees)
+    """
+    if len(contour) < 5:
+        return None, None
+        
+    # Fit an ellipse to get the apparent width
+    (x, y), (width, height), angle = cv2.fitEllipse(contour)
+    
+    # Convert pixel width to meters using perspective projection formula
+    # distance = (actual_width_m * focal_length_pixels) / apparent_width_pixels
+    apparent_diameter = min(width, height)  # Use the smaller dimension as diameter
+    distance = (actual_diameter * focal_length) / apparent_diameter
+    
+    # Calculate horizontal angle using arctangent
+    # Angle from center of image to center of cylinder
+    dx = x - camera_center[0]
+    angle = np.arctan2(dx, focal_length)
+    angle_degrees = np.degrees(angle)
+    
+    return distance, angle_degrees
+
 def fit_cylinder_contour(contour):
     """
     Fits a more precise contour to a cylinder shape using ellipse fitting.
     Returns both the fitted contour and endpoints for visualization.
     """
-    if len(contour) < 5:  # Need at least 5 points to fit an ellipse
+    if len(contour) < 5:
         return None, None
     
-    # Fit an ellipse to get orientation
     ellipse = cv2.fitEllipse(contour)
     (x, y), (width, height), angle = ellipse
     
-    # Calculate major axis endpoints
     radians = np.deg2rad(angle)
     length = max(width, height) / 2
     dx = length * np.cos(radians)
@@ -53,7 +83,6 @@ def fit_cylinder_contour(contour):
     endpoint1 = (int(x + dx), int(y + dy))
     endpoint2 = (int(x - dx), int(y - dy))
     
-    # Create a more precise contour using convex hull
     hull = cv2.convexHull(contour)
     
     return hull, (endpoint1, endpoint2)
@@ -64,8 +93,13 @@ mtx = np.array([[568.20791041, 0.0, 341.37830129],
                 [0.0, 0.0, 1.0]])
 dist = np.array([[0.08705563, 0.10725078, -0.01064468, 0.01151696, -0.33419273]])
 
+# Constants
+CYLINDER_DIAMETER = 0.1016  # meters
+FOCAL_LENGTH = (mtx[0, 0] + mtx[1, 1]) / 2  # Average of fx and fy
+CAMERA_CENTER = (mtx[0, 2], mtx[1, 2])  # Camera optical center (cx, cy)
+
 # Main video capture loop
-cap = cv2.VideoCapture(1)  # Use 0 for default camera
+cap = cv2.VideoCapture(1)
 
 # Initial HSV values
 pv_hue_min = 0
@@ -94,7 +128,6 @@ while True:
     if not ret:
         break
         
-    # Undistort the frame
     frame = undistort_frame(frame, mtx, dist)
 
     # Get current trackbar positions
@@ -105,29 +138,49 @@ while True:
     value_min = cv2.getTrackbarPos("Val Min", "Filtered Video")
     value_max = cv2.getTrackbarPos("Val Max", "Filtered Video")
 
-    # Filter by HSV values
     mask = filter_hsv_inverted(frame, pv_hue_min, pv_hue_max, saturation_min, saturation_max, value_min, value_max)
-
-    # Apply the mask
     filtered_frame = cv2.bitwise_and(frame, frame, mask=mask)
 
-    # Find contours
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     if contours:
-        # Find the largest contour
         largest_contour = max(contours, key=cv2.contourArea)
-        
-        # Fit the cylinder contour
         fitted_contour, endpoints = fit_cylinder_contour(largest_contour)
         
         if fitted_contour is not None:
+            # Calculate distance and angle
+            distance, angle = calculate_distance_and_angle(
+                largest_contour, 
+                FOCAL_LENGTH,
+                CYLINDER_DIAMETER,
+                CAMERA_CENTER
+            )
+            
             # Draw the fitted contour
             cv2.drawContours(filtered_frame, [fitted_contour], -1, (0, 255, 0), 2)
             
             # Draw the major axis line
             if endpoints:
                 cv2.line(filtered_frame, endpoints[0], endpoints[1], (255, 0, 0), 2)
+            
+            # Display distance and angle
+            if distance is not None and angle is not None:
+                cv2.putText(filtered_frame, 
+                           f"Distance: {distance:.2f}m", 
+                           (10, 60), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 
+                           1, 
+                           (0, 255, 0), 
+                           2, 
+                           cv2.LINE_AA)
+                cv2.putText(filtered_frame, 
+                           f"Angle: {angle:.2f}deg", 
+                           (10, 90), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 
+                           1, 
+                           (0, 255, 0), 
+                           2, 
+                           cv2.LINE_AA)
 
     # Calculate and display FPS
     current_time = time.time()
