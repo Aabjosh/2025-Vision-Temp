@@ -2,6 +2,14 @@ import cv2
 import numpy as np
 import time
 
+# Camera coeffs found for OV9281
+mtx = np.array([[568.20791041, 0.0, 341.37830129],
+                [0.0, 569.81774569, 238.05524919],
+                [0.0, 0.0, 1.0]])
+dist = np.array([
+      [0.08705563,  0.10725078, -0.01064468,  0.01151696, -0.33419273]
+    ])
+
 def filter_hsv_inverted(frame, pv_hue_min, pv_hue_max, saturation_min, saturation_max, value_min, value_max):
     """
     Filters an image based on inverted hue values from PhotonVision and HSV ranges.
@@ -72,6 +80,8 @@ while True:
     ret, frame = cap.read()
     if not ret:
         break
+
+    undistorted_frame = cv2.undistort(frame, mtx, dist, None) 
 
     # Get current trackbar positions
     pv_hue_min = cv2.getTrackbarPos("PV Hue Min", "Filtered Video")
